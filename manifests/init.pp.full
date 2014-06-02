@@ -1,0 +1,154 @@
+# Class: gpp-node
+#
+# This class installs a REDHAWK GPP Node
+#
+# Parameters:
+#
+# Actions:
+#   - Install REDHAWK GPP Node
+#   - Manage GPP service
+#
+# Requires:
+#
+# Sample Usage:
+#
+class gpp_node (
+  $node_name        = 'my-gpp-node',
+  $node_num         = 1,
+  $service_enable   = true,
+  $service_ensure   = true,
+  $manage_user      = false,
+  $manage_group     = false,
+)
+  # true/false is sufficient for both ensure and enable
+  validate_bool($service_enable)
+
+  # declare the web server user and group
+  # Note: requiring the package means the package ought to create them and not puppet
+  validate_bool($manage_user)
+  if $manage_user {
+    user { $user:
+      ensure  => present,
+      gid     => $group,
+      require => Package['my-gpp-node'],
+    }
+  }
+  validate_bool($manage_group)
+  if $manage_group {
+    group { $group:
+      ensure  => present,
+      require => Package['my-gpp-node']
+    }
+  }
+
+  class { '::apache::service':
+    service_name   => $node_name,
+    service_enable => $service_enable,
+    service_ensure => $service_ensure,
+  }
+
+  Exec {
+    path => '/bin:/sbin:/usr/bin:/usr/sbin',
+  }
+
+  exec { "mkdir ${confd_dir}":
+    creates => $confd_dir,
+    require => Package['httpd'],
+  }
+  file { $confd_dir:
+    ensure  => directory,
+    recurse => true,
+    purge   => $purge_confd,
+    notify  => Class['Apache::Service'],
+    require => Package['httpd'],
+  }
+
+  concat { $ports_file:
+    owner   => 'root',
+    group   => $::apache::params::root_group,
+    mode    => '0644',
+    notify  => Class['Apache::Service'],
+    require => Package['httpd'],
+  }
+  concat::fragment { 'Apache ports header':
+    target  => $ports_file,
+    content => template('apache/ports_header.erb')
+  }
+
+  if $::apache::params::conf_dir and $::apache::params::conf_file {
+    case $::osfamily {
+      'debian': {
+        $docroot              = '/var/www'
+        $pidfile              = '${APACHE_PID_FILE}'
+        $error_log            = 'error.log'
+        $error_documents_path = '/usr/share/apache2/error'
+        $scriptalias          = '/usr/lib/cgi-bin'
+        $access_log_file      = 'access.log'
+      }
+      'redhat': {
+        $docroot              = '/var/www/html'
+        $pidfile              = 'run/httpd.pid'
+        $error_log            = 'error_log'
+        $error_documents_path = '/var/www/error'
+        $scriptalias          = '/var/www/cgi-bin'
+        $access_log_file      = 'access_log'
+      }
+      default: {
+        fail("Unsupported osfamily ${::osfamily}")
+      }
+    }
+
+    # Template uses:
+    # - $pidfile
+    # - $user
+    # - $group
+    # - $logroot
+    # - $error_log
+    # - $sendfile
+    # - $mod_dir
+    # - $ports_file
+    # - $confd_dir
+    # - $vhost_dir
+    # - $error_documents
+    # - $error_documents_path
+    # - $apxs_workaround
+    # - $keepalive
+    # - $keepalive_timeout
+    # - $server_root
+    # - $server_tokens
+    # - $server_signature
+    # - $trace_enable
+    file { "${::apache::params::conf_dir}/${::apache::params::conf_file}":
+      ensure  => file,
+      content => template($conf_template),
+      notify  => Class['Apache::Service'],
+      require => Package['httpd'],
+    }
+
+    class { '::apache::default_confd_files':
+      all => $default_confd_files
+    }
+
+    ::apache::vhost { 'default':
+      ensure          => $default_vhost_ensure,
+      port            => 80,
+      docroot         => $docroot,
+      scriptalias     => $scriptalias,
+      serveradmin     => $serveradmin,
+      access_log_file => $access_log_file,
+      priority        => '15',
+      ip              => $ip,
+    }
+    ::apache::vhost { 'default-ssl':
+      ensure          => $default_ssl_vhost_ensure,
+      port            => 443,
+      ssl             => true,
+      docroot         => $docroot,
+      scriptalias     => $scriptalias,
+      serveradmin     => $serveradmin,
+      access_log_file => $ssl_access_log_file,
+      priority        => '15',
+      ip              => $ip,
+    }
+  }
+}
